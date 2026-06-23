@@ -13,8 +13,9 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-// Capture the install prompt as early as possible — Chrome fires
-// `beforeinstallprompt` once, often before React has mounted.
+// Capture the prompt as early as possible — Chrome fires it once, often
+// before React mounts. We store it globally so the component can use it
+// whenever it mounts.
 let _deferredPrompt: BeforeInstallPromptEvent | null = null;
 if (typeof window !== "undefined") {
   window.addEventListener("beforeinstallprompt", (e) => {
@@ -26,24 +27,13 @@ if (typeof window !== "undefined") {
 const INSTALLED_DELAY_MS = 3000;
 
 export interface PwaInstallProps {
-  /** App name shown in the banner copy. */
   appName: string;
-  /** Path to the service worker. Default: "/sw.js". */
   swPath?: string;
-  /** Accent color for the install button / icons. Default: "#7c9cff". */
   accentColor?: string;
-  /** Override the localStorage dismissal key (useful for multiple PWAs on one origin). */
   storageKey?: string;
-  /** Set false to skip registering the service worker (e.g. if you do it elsewhere). */
   registerServiceWorker?: boolean;
 }
 
-/**
- * Drop-in mobile install banner for a PWA. Registers the service worker, then
- * — on phones, when not already installed and not previously dismissed —
- * shows a banner. Android/desktop Chrome get a one-tap Install button;
- * iOS Safari gets "Add to Home Screen" instructions.
- */
 export function PwaInstall({
   appName,
   swPath = "/sw.js",
@@ -54,8 +44,10 @@ export function PwaInstall({
   const dismissKey = storageKey ?? `make-pwa:install-dismissed:${appName}`;
   const isMobile = useIsMobile();
 
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [showBanner, setShowBanner] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(
+    () => _deferredPrompt,
+  );
+  const [show, setShow] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -64,76 +56,69 @@ export function PwaInstall({
     if (registerServiceWorker) registerSW(swPath);
   }, [registerServiceWorker, swPath]);
 
+  // Show the banner on every mobile visit that isn't already installed or
+  // dismissed — regardless of whether Chrome has fired beforeinstallprompt.
+  // We always have something useful to show (manual instructions as fallback).
   useEffect(() => {
-    if (!isMobile) {
-      setShowBanner(false);
-      return;
-    }
+    if (!isMobile) { setShow(false); return; }
 
-    const isStandalone =
+    const standalone =
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as unknown as { standalone?: boolean }).standalone === true;
-    if (isStandalone) return;
+    if (standalone) return;
 
     if (localStorage.getItem(dismissKey)) return;
 
-    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setIsIOS(ios);
+    setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent));
+    setShow(true);
+  }, [isMobile, dismissKey]);
 
-    if (ios) {
-      setShowBanner(true);
-      return;
-    }
-
-    if (_deferredPrompt) {
-      setDeferredPrompt(_deferredPrompt);
-      setShowBanner(true);
-      return;
-    }
-
+  // Pick up the prompt if Chrome fires it after the component is already mounted.
+  useEffect(() => {
     const handler = (e: Event) => {
       e.preventDefault();
       _deferredPrompt = e as BeforeInstallPromptEvent;
       setDeferredPrompt(_deferredPrompt);
-      setShowBanner(true);
     };
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
-  }, [isMobile, dismissKey]);
+  }, []);
 
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
   const handleInstall = useCallback(async () => {
     if (!deferredPrompt) return;
     await deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     setDeferredPrompt(null);
+    _deferredPrompt = null;
     if (outcome === "accepted") {
       localStorage.setItem(dismissKey, "1");
       setJustInstalled(true);
-      timerRef.current = setTimeout(() => setShowBanner(false), INSTALLED_DELAY_MS);
+      timerRef.current = setTimeout(() => setShow(false), INSTALLED_DELAY_MS);
     }
   }, [deferredPrompt, dismissKey]);
 
   const handleDismiss = useCallback(() => {
     localStorage.setItem(dismissKey, "1");
-    setShowBanner(false);
+    setShow(false);
   }, [dismissKey]);
 
-  if (!showBanner) return null;
+  if (!show) return null;
 
+  // What to show:
+  //   installed → confirmation
+  //   iOS       → share sheet instructions (only way on iOS)
+  //   Android + prompt ready → one-tap Install button
+  //   Android + no prompt yet → manual instructions (⋮ menu)
+  const canInstall = !justInstalled && !isIOS && !!deferredPrompt;
   const message = justInstalled
     ? `Installed! Find ${appName} on your home screen.`
     : isIOS
-      ? 'Tap the share button, then "Add to Home Screen"'
-      : `Install ${appName} for the best experience`;
-
-  const showInstallBtn = !justInstalled && !isIOS && !!deferredPrompt;
+    ? 'Tap the Share button, then "Add to Home Screen"'
+    : deferredPrompt
+    ? `Install ${appName} for the best experience`
+    : `Tap ⋮ then "Add to Home Screen" to install ${appName}`;
 
   return (
     <div style={styles.banner} role="region" aria-label={`Install ${appName}`}>
@@ -144,11 +129,8 @@ export function PwaInstall({
         <span style={styles.text}>{message}</span>
       </div>
       <div style={styles.actions}>
-        {showInstallBtn && (
-          <button
-            style={{ ...styles.btn, background: accentColor }}
-            onClick={handleInstall}
-          >
+        {canInstall && (
+          <button style={{ ...styles.btn, background: accentColor }} onClick={handleInstall}>
             Install
           </button>
         )}
