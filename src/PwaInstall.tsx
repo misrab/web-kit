@@ -13,9 +13,6 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-// Capture the prompt as early as possible — Chrome fires it once, often
-// before React mounts. We store it globally so the component can use it
-// whenever it mounts.
 let _deferredPrompt: BeforeInstallPromptEvent | null = null;
 if (typeof window !== "undefined") {
   window.addEventListener("beforeinstallprompt", (e) => {
@@ -56,24 +53,18 @@ export function PwaInstall({
     if (registerServiceWorker) registerSW(swPath);
   }, [registerServiceWorker, swPath]);
 
-  // Show the banner on every mobile visit that isn't already installed or
-  // dismissed — regardless of whether Chrome has fired beforeinstallprompt.
-  // We always have something useful to show (manual instructions as fallback).
   useEffect(() => {
     if (!isMobile) { setShow(false); return; }
-
     const standalone =
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as unknown as { standalone?: boolean }).standalone === true;
     if (standalone) return;
-
     if (localStorage.getItem(dismissKey)) return;
-
     setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent));
     setShow(true);
   }, [isMobile, dismissKey]);
 
-  // Pick up the prompt if Chrome fires it after the component is already mounted.
+  // Pick up the prompt if Chrome fires it after mount.
   useEffect(() => {
     const handler = (e: Event) => {
       e.preventDefault();
@@ -99,46 +90,60 @@ export function PwaInstall({
     }
   }, [deferredPrompt, dismissKey]);
 
-  const handleDismiss = useCallback(() => {
-    localStorage.setItem(dismissKey, "1");
-    setShow(false);
-  }, [dismissKey]);
-
   if (!show) return null;
 
-  // What to show:
-  //   installed → confirmation
-  //   iOS       → share sheet instructions (only way on iOS)
-  //   Android + prompt ready → one-tap Install button
-  //   Android + no prompt yet → manual instructions (⋮ menu)
-  const canInstall = !justInstalled && !isIOS && !!deferredPrompt;
-  const message = justInstalled
-    ? `Installed! Find ${appName} on your home screen.`
-    : isIOS
-    ? 'Tap the Share button, then "Add to Home Screen"'
-    : deferredPrompt
-    ? `Install ${appName} for the best experience`
-    : `Tap ⋮ then "Add to Home Screen" to install ${appName}`;
-
-  return (
-    <div style={styles.banner} role="region" aria-label={`Install ${appName}`}>
-      <div style={styles.content}>
-        <span style={{ ...styles.icon, color: accentColor }} aria-hidden>
-          {justInstalled ? <CheckIcon /> : <DownloadIcon />}
-        </span>
-        <span style={styles.text}>{message}</span>
+  // Installed confirmation
+  if (justInstalled) {
+    return (
+      <div style={styles.banner}>
+        <div style={styles.content}>
+          <span style={{ ...styles.icon, color: accentColor }}><CheckIcon /></span>
+          <span style={styles.text}>Installed! Find {appName} on your home screen.</span>
+        </div>
       </div>
-      <div style={styles.actions}>
-        {canInstall && (
-          <button style={{ ...styles.btn, background: accentColor }} onClick={handleInstall}>
-            Install
-          </button>
-        )}
-        {!justInstalled && (
-          <button style={styles.close} onClick={handleDismiss} aria-label="Dismiss">
-            <XIcon />
-          </button>
-        )}
+    );
+  }
+
+  // iOS: can only use share sheet
+  if (isIOS) {
+    return (
+      <div style={styles.banner}>
+        <div style={styles.content}>
+          <span style={{ ...styles.icon, color: accentColor }}><ShareIcon /></span>
+          <div>
+            <div style={styles.title}>Install {appName}</div>
+            <div style={styles.hint}>Tap the share icon below, then "Add to Home Screen"</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Android + prompt ready: one-tap install
+  if (deferredPrompt) {
+    return (
+      <button style={{ ...styles.banner, ...styles.bannerBtn }} onClick={handleInstall}>
+        <div style={styles.content}>
+          <span style={{ ...styles.icon, color: accentColor }}><DownloadIcon /></span>
+          <div>
+            <div style={styles.title}>Install {appName}</div>
+            <div style={styles.hint}>Tap to add to your home screen</div>
+          </div>
+        </div>
+        <span style={{ ...styles.installBtn, background: accentColor }}>Install</span>
+      </button>
+    );
+  }
+
+  // Android + no prompt yet: manual instructions
+  return (
+    <div style={styles.banner}>
+      <div style={styles.content}>
+        <span style={{ ...styles.icon, color: accentColor }}><DownloadIcon /></span>
+        <div>
+          <div style={styles.title}>Install {appName}</div>
+          <div style={styles.hint}>Tap <strong>⋮</strong> (top right of Chrome) → "Add to Home Screen"</div>
+        </div>
       </div>
     </div>
   );
@@ -150,46 +155,56 @@ const styles: Record<string, CSSProperties> = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
-    padding: "10px 16px",
-    paddingTop: "calc(10px + env(safe-area-inset-top, 0px))",
+    padding: "12px 16px",
+    paddingTop: "calc(12px + env(safe-area-inset-top, 0px))",
     background: "rgba(124, 156, 255, 0.12)",
-    borderBottom: "1px solid rgba(124, 156, 255, 0.28)",
+    borderBottom: "1px solid rgba(124, 156, 255, 0.25)",
     flexShrink: 0,
     fontFamily: "system-ui, -apple-system, sans-serif",
+    width: "100%",
+    boxSizing: "border-box",
   },
-  content: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
-  icon: { display: "flex", flexShrink: 0 },
-  text: { fontSize: 14, lineHeight: 1.3, color: "inherit" },
-  actions: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
-  btn: {
-    padding: "6px 14px",
-    fontSize: 14,
-    fontWeight: 500,
-    color: "#fff",
-    border: "none",
-    borderRadius: 6,
+  bannerBtn: {
     cursor: "pointer",
-    whiteSpace: "nowrap",
-    minHeight: 36,
+    border: "none",
+    textAlign: "left",
+    color: "inherit",
   },
-  close: {
+  content: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "center",
-    width: 32,
-    height: 32,
-    background: "none",
+    gap: 10,
+    minWidth: 0,
+    flex: 1,
+  },
+  icon: { display: "flex", flexShrink: 0 },
+  title: {
+    fontSize: 14,
+    fontWeight: 600,
+    lineHeight: 1.3,
+  },
+  hint: {
+    fontSize: 12,
+    opacity: 0.7,
+    lineHeight: 1.4,
+    marginTop: 2,
+  },
+  text: { fontSize: 14, lineHeight: 1.3 },
+  installBtn: {
+    flexShrink: 0,
+    padding: "7px 16px",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#fff",
     border: "none",
-    color: "inherit",
-    opacity: 0.6,
-    cursor: "pointer",
-    borderRadius: 4,
+    borderRadius: 8,
+    whiteSpace: "nowrap",
   },
 };
 
 function DownloadIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" y1="15" x2="12" y2="3" />
@@ -199,17 +214,18 @@ function DownloadIcon() {
 
 function CheckIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="20 6 9 17 4 12" />
     </svg>
   );
 }
 
-function XIcon() {
+function ShareIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+      <polyline points="16 6 12 2 8 6" />
+      <line x1="12" y1="2" x2="12" y2="15" />
     </svg>
   );
 }
