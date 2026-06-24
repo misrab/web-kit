@@ -60,13 +60,12 @@ export function PwaInstall({
       (navigator as unknown as { standalone?: boolean }).standalone === true;
     if (standalone) return;
     if (localStorage.getItem(dismissKey)) return;
-    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setIsIOS(ios);
-    // On iOS we always show (no prompt event, share sheet is the only path).
-    // On Android we only show once Chrome has fired beforeinstallprompt —
-    // i.e. the SW is controlling and the app is installable. Until then,
-    // showing confusing manual instructions is worse than showing nothing.
-    if (ios || _deferredPrompt) setShow(true);
+    setIsIOS(/iPad|iPhone|iPod/.test(navigator.userAgent));
+    // Always show on mobile. `beforeinstallprompt` is unreliable (suppressed by
+    // a stale service worker, same-host manifest-id collisions, or Chrome's
+    // engagement heuristics), so we never gate the banner on it — we just
+    // upgrade to the one-tap Install button if/when the event arrives.
+    setShow(true);
   }, [isMobile, dismissKey]);
 
   // Pick up the prompt if Chrome fires it after mount, and show the banner.
@@ -141,9 +140,19 @@ export function PwaInstall({
     );
   }
 
-  // Android but no prompt yet — show nothing. Chrome will fire
-  // beforeinstallprompt on the next load once the SW is controlling.
-  return null;
+  // Android, no prompt available yet — guide the user through the menu so the
+  // banner is never a dead end while Chrome decides the app is installable.
+  return (
+    <div style={styles.banner}>
+      <div style={styles.content}>
+        <span style={{ ...styles.icon, color: accentColor }}><DownloadIcon /></span>
+        <div>
+          <div style={styles.title}>Install {appName}</div>
+          <div style={styles.hint}>Open the browser menu (⋮), then "Install app" / "Add to Home screen"</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const styles: Record<string, CSSProperties> = {
