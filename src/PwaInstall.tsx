@@ -75,11 +75,11 @@ export function PwaInstall({
       e.preventDefault();
       _deferredPrompt = e as BeforeInstallPromptEvent;
       setDeferredPrompt(_deferredPrompt);
-      setShow(true);
+      if (isMobile) setShow(true); // mobile-only
     };
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
-  }, []);
+  }, [isMobile]);
 
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
