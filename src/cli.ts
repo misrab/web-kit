@@ -4,6 +4,7 @@ import path from "node:path";
 
 interface Args {
   name: string;
+  id: string; // stable manifest identity (slug)
   short: string;
   color: string; // background color of the icon + manifest background_color
   theme: string; // theme_color
@@ -29,6 +30,7 @@ function parseArgs(argv: string[]): Args {
   const color = m.get("color") ?? m.get("bg") ?? "#0f1117";
   return {
     name,
+    id: m.get("id") ?? slug(name),
     short: m.get("short") ?? name,
     color,
     theme: m.get("theme") ?? color,
@@ -38,6 +40,11 @@ function parseArgs(argv: string[]): Args {
     html: m.get("html") ?? "index.html",
     logo: m.get("logo"),
   };
+}
+
+/** Lowercase URL-safe slug, used as the stable PWA manifest `id`. */
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function fail(msg: string): never {
@@ -148,6 +155,7 @@ self.addEventListener("notificationclick", (event) => {
 function manifest(a: Args): string {
   return JSON.stringify(
     {
+      id: a.id,
       name: a.name,
       short_name: a.short,
       start_url: "/",
